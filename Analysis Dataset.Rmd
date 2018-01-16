@@ -1,0 +1,23 @@
+---
+title: "Analysis Dataset"
+author: "Prashit Parikh"
+date: "11/9/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#Import original Data Set from Kaggle
+tennisdata = read.csv("tennis.csv")
+#Names of Variables
+names(tennisdata)
+#Only Looking for Complete Cases
+tennisdata.comp = tennisdata[complete.cases(tennisdata),]
+#Create File 
+write.csv(tennisdata.comp, file = "tennisdata.csv")
+
+#Load New Data Set
+tendata = read.csv("tennisdata.csv")

@@ -1,0 +1,677 @@
+---
+title: '242 Final Project'
+author: "Prashit Parikh"
+date: "11/30/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+###Exploration
+
+#Basic Data Set Information
+tendata = read.csv(file = "tennisdatafinal.csv")
+names(tendata)
+head(tendata)
+str(tendata)
+summary(tendata)
+
+#The variables chosen as a focus will be: Location, Tournament, Season(Thus we will not use the exact date as we are focusing rather on conditions as a whole during this part of the year), Surface, Round, Best.of, Winner, Loser, WRank, LRank, Wsets, and all of the Games W/L per set variables. The outcome will be the created variable of Retired.
+ 
+#Series and Court not used as there is no variability seen in these variables
+with(tendata, table(Series))
+with(tendata, table(Court))
+with(tendata, table(Wsets)) #This one is okay
+with(tendata, table(Lsets)) #Can't use
+
+#Data Clean-up before actually beginning to model
+tendata$Series <- NULL
+tendata$Court <- NULL
+tendata$X <- NULL
+tendata$ATP <- NULL
+tendata$Date <- NULL
+
+#Set Data to Working Terms
+tendata$Winner <- as.factor(tendata$Winner)
+tendata$Loser <- as.factor(tendata$Loser)
+
+tendata$WRank <- as.numeric(tendata$WRank)
+tendata$LRank <- as.numeric(tendata$LRank)
+
+# library(Amelia)
+# missmap(tendata, main = "Missing values vs observed") #We can observe that our data set is complete and has no holes, ensuring the preliminary writing of a complete csv was successful. This also indicates that the matches which were retired are also completed, with 0's placed for the sets and matches not played.
+```
+
+```{r}
+tendata2 <- tendata[,c(1:9,20,21)] ## resize our dataframe so we can make a correlation table
+
+#Code credit to Scott Chamberlin from R-bloggers
+#Expanded Splom to examine variable relationships
+panel.cor <- function(x, y, digits=2, prefix="", cex.cor) 
+{
+    usr <- par("usr"); on.exit(par(usr)) 
+    par(usr = c(0, 1, 0, 1)) 
+    r <- abs(cor(x, y)) 
+    txt <- format(c(r, 0.123456789), digits=digits)[1] 
+    txt <- paste(prefix, txt, sep="") 
+    if(missing(cex.cor)) cex <- 0.8/strwidth(txt) 
+ 
+    test <- cor.test(x,y) 
+    # borrowed from printCoefmat
+    Signif <- symnum(test$p.value, corr = FALSE, na = FALSE, 
+                  cutpoints = c(0, 0.001, 0.01, 0.05, 0.1, 1),
+                  symbols = c("***", "**", "*", ".", " ")) 
+ 
+    text(0.5, 0.5, txt, cex = cex * r) 
+    text(.8, .8, Signif, cex=cex, col=2) 
+}
+pairs(tendata2, lower.panel=panel.smooth, upper.panel=panel.cor)
+
+#Omitted the set game wins and losses beause it muddies up relationships. A seperate splom is made below for only these variables:
+
+tendata3 <- tendata[,c(10:19)] ## resize our dataframe so we can make a correlation table
+
+panel.cor <- function(x, y, digits=2, prefix="", cex.cor) 
+{
+    usr <- par("usr"); on.exit(par(usr)) 
+    par(usr = c(0, 1, 0, 1)) 
+    r <- abs(cor(x, y)) 
+    txt <- format(c(r, 0.123456789), digits=digits)[1] 
+    txt <- paste(prefix, txt, sep="") 
+    if(missing(cex.cor)) cex <- 0.8/strwidth(txt) 
+ 
+    test <- cor.test(x,y) 
+    # borrowed from printCoefmat
+    Signif <- symnum(test$p.value, corr = FALSE, na = FALSE, 
+                  cutpoints = c(0, 0.001, 0.01, 0.05, 0.1, 1),
+                  symbols = c("***", "**", "*", ".", " ")) 
+ 
+    text(0.5, 0.5, txt, cex = cex * r) 
+    text(.8, .8, Signif, cex=cex, col=2) 
+}
+pairs(tendata3, lower.panel=panel.smooth, upper.panel=panel.cor)
+```
+
+
+```{r}
+###Variable Creation
+
+#Created a Season Variable where 1 = Winter (December, January, February) 2 = Spring (March, April, May) 3 = Summer (June, July, August) and 4 = Fall (September, October, November)
+
+tendata$number <- seq(1:1593) #Done in order to name the number of rows to make mutate variable
+library(dplyr)
+library(car)
+
+tendata <- mutate(tendata, Season = ifelse(tendata$number < 411, 1,
+                                 ifelse(tendata$number < 458, 3,
+                                 ifelse(tendata$number < 798, 2,
+                                 ifelse(tendata$number < 932, 4,
+                                 ifelse(tendata$number < 1593, 3, 0))))))
+
+with(tendata, table(Season, number)) #Depicts how each value or observation match from the data set is assigned only one season
+
+boxplot(Lsets ~ Season, data = tendata) 
+hist(tendata$Lsets)
+summary(tendata$Lsets)#As originally indicated for an outcome, Lsets can not be tested as observed here. This is because the obseved values for every match seems to be 2. Thus we will try a new regression setting ...
+tendata$Lsets <- NULL
+
+#Create the variable Retired for analysis
+#First making sure this is a justifiable choice for regression
+with(tendata, table(Comment))
+prop.table(with(tendata, table(Comment)))
+
+
+#This way to mutate the variable seems to not be as clear: tendata$Retired = tendata$Comment-1
+#Therefore we have:
+
+tendata$Comment <- as.numeric(tendata$Comment)
+tendata <- mutate(tendata, Retired = ifelse(tendata$Comment == 1, 0,
+                                 ifelse(tendata$Comment == 2, 1, 100)))
+```
+
+```{r}
+#Loading Packages
+library(dplyr)
+library(car)
+library(ggplot2)
+```
+
+```{r}
+#Relationship between Retired Matches and Surfaces
+tendatagraph <- tendata %>% 
+  group_by(Surface,Retired) %>% 
+  summarise(count=n()) %>% 
+  mutate(perc=count/sum(count))
+ggplot(tendatagraph, aes(x = factor(Surface), y = perc*100, fill = factor(Retired))) +
+  geom_bar(stat="identity", width = 0.7) +
+  labs(x = "Surface", y = "Percent", fill = "Retired") +
+  theme_minimal(base_size = 14)
+
+prop = prop.table(with(tendata, table(Retired, Surface)), mar = 2)[2,]
+labels = names(prop)
+ggplot(data = data.frame(), aes(x = labels, y = prop)) + geom_bar(stat = "identity", position = "dodge") #Puts into proportions the number of retirements by surface
+
+#Relationship between Retired Matches and Round
+tendatagraph <- tendata %>% 
+  group_by(Round,Retired) %>% 
+  summarise(count=n()) %>% 
+  mutate(perc=count/sum(count))
+ggplot(tendatagraph, aes(x = factor(Round), y = perc*100, fill = factor(Retired))) +
+  geom_bar(stat="identity", width = 0.7) +
+  labs(x = "Round", y = "Percent", fill = "Retired") +
+  theme_minimal(base_size = 10)
+
+
+prop1 = prop.table(with(tendata, table(Retired, Round)), mar = 2)[2,]
+labels1 = names(prop1)
+ggplot(data = data.frame(), aes(x = labels1, y = prop1)) + geom_bar(stat = "identity", position = "dodge") #Puts into proportions the number of retirements by round
+
+#Relationship between Retired Matches and Season
+tendatagraph <- tendata %>% 
+  group_by(Season,Retired) %>% 
+  summarise(count=n()) %>% 
+  mutate(perc=count/sum(count))
+ggplot(tendatagraph, aes(x = factor(Season), y = perc*100, fill = factor(Retired))) +
+  geom_bar(stat="identity", width = 0.7) +
+  labs(x = "Season", y = "Percent", fill = "Retired") +
+  theme_minimal(base_size = 14)
+
+prop2 = prop.table(with(tendata, table(Retired, Season)), mar = 2)[2,]
+labels2 = names(prop2)
+ggplot(data = data.frame(), aes(x = labels2, y = prop2)) + geom_bar(stat = "identity", position = "dodge") #Puts into proportions the number of retirements by Season
+
+#Looking at Variabes Based on our Binary Outcome
+boxplot(W5 ~ Retired, data = tendata)
+boxplot(L5 ~ Retired, data = tendata)
+boxplot(W4 ~ Retired, data = tendata)
+boxplot(L4 ~ Retired, data = tendata)
+boxplot(W3 ~ Retired, data = tendata)
+boxplot(L3 ~ Retired, data = tendata)
+boxplot(W2 ~ Retired, data = tendata)
+boxplot(L2 ~ Retired, data = tendata)
+boxplot(W1 ~ Retired, data = tendata)
+boxplot(L1 ~ Retired, data = tendata)
+```
+
+```{r, results='hide', echo=FALSE}
+#Not Used as Data Overwrites itself, could use == however, it's easier the way done above with sequencing the rows and assigning values for Season that way
+#tendata <- mutate(tendata, Season = ifelse(tendata$Date < 2, 1, #Australian Open
+#                                 ifelse(tendata$Date < 36, 1,
+ #                                ifelse(tendata$Date < 81, 1,
+  #                               ifelse(tendata$Date < 116, 1,
+   #                              ifelse(tendata$Date < 128, 1,
+    #                             ifelse(tendata$Date < 140, 1,
+     #                            ifelse(tendata$Date < 152, 1,
+      #                           ifelse(tendata$Date < 171, 1,
+       #                          ifelse(tendata$Date < 194, 1,
+        #                         ifelse(tendata$Date < 222, 1,
+         #                        ifelse(tendata$Date < 249, 1,
+          #                       ifelse(tendata$Date < 308, 1,
+           #                      ifelse(tendata$Date < 363, 1, 100))))))))))))))
+            #                
+#tendata <- mutate(tendata, Season = ifelse(tendata$Date < 347, 3, #Wimbledon Tournament
+ #                                ifelse(tendata$Date < 14, 3,
+  #                               ifelse(tendata$Date < 435, 3,
+   #                              ifelse(tendata$Date < 449, 3,
+    #                             ifelse(tendata$Date < 419, 3,
+     #                            ifelse(tendata$Date < 464, 3,
+      #                           ifelse(tendata$Date < 351, 3,
+       #                          ifelse(tendata$Date < 93, 3,
+        #                         ifelse(tendata$Date < 456, 3,
+         #                        ifelse(tendata$Date < 132, 3,
+          #                       ifelse(tendata$Date < 147, 3,
+           #                      ifelse(tendata$Date < 163, 3,
+            #                     ifelse(tendata$Date < 188, 3,
+             #                    ifelse(tendata$Date < 214, 3,
+              #                   ifelse(tendata$Date < 240, 3,
+               #                  ifelse(tendata$Date < 271, 3,
+                #                 ifelse(tendata$Date < 298, 3,
+                 #                ifelse(tendata$Date < 331, 3,
+                  #               ifelse(tendata$Date < 380, 3, 100)))))))))))))))))))))
+                   #                     
+#tendata <- mutate(tendata, Season = ifelse(tendata$Date < 89, 3, #French Open
+ #                                ifelse(tendata$Date < 345, 3,
+  #                               ifelse(tendata$Date < 416, 3,
+   #                              ifelse(tendata$Date < 444, 3,
+    #                             ifelse(tendata$Date < 9, 3,
+     #                            ifelse(tendata$Date < 430, 3,
+      #                           ifelse(tendata$Date < 455, 3,
+       #                          ifelse(tendata$Date < 142, 2,
+        #                         ifelse(tendata$Date < 156, 2,
+         #                        ifelse(tendata$Date < 178, 2,
+          #                       ifelse(tendata$Date < 203, 2,
+           #                      ifelse(tendata$Date < 232, 2,
+            #                     ifelse(tendata$Date < 261, 2,
+             #                    ifelse(tendata$Date < 289, 2,
+              #                   ifelse(tendata$Date < 322, 2,
+               #                  ifelse(tendata$Date < 373, 2,
+                #                 ifelse(tendata$Date < 398, 2, 100))))))))))))))))))
+                 #                 
+#tendata <- mutate(tendata, US_Season = ifelse(tendata$Date < 217, 3, #US Open
+ #                                ifelse(tendata$Date < 245, 3,
+  #                               ifelse(tendata$Date < 278, 3,
+   #                              ifelse(tendata$Date < 305, 3,
+    #                             ifelse(tendata$Date < 390, 3,
+     #                            ifelse(tendata$Date < 411, 3,
+      #                           ifelse(tendata$Date < 428, 4,
+       #                          ifelse(tendata$Date < 454, 4,
+        #                         ifelse(tendata$Date < 24, 4,
+         #                        ifelse(tendata$Date < 104, 4,
+          #                       ifelse(tendata$Date < 361, 4,
+           #                      ifelse(tendata$Date < 442, 4,
+            #                     ifelse(tendata$Date < 468, 4,
+             #                    ifelse(tendata$Date < 29, 4,
+              #                   ifelse(tendata$Date < 461, 4,
+               #                  ifelse(tendata$Date < 466, 4,
+                #                 ifelse(tendata$Date < 37, 4)))))))))))))))))))
+```
+
+
+```{r}
+###Model Creation
+
+#For this regression analysis, I will conduct both backwards and forward selections methods manually and utilizing the package in R "LASSO"
+
+###Manual
+
+##Forward Selection
+
+#The variables chosen as a focus will be: Location, Tournament, Season(Thus we will not use the exact date as we are focusing rather on conditions as a whole during this part of the year), Surface, Round, Best.of, Winner, Loser, WRank, LRank, Wsets, and all of the Games W/L per set variables. The outcome will be the created variable of Retired.
+
+fit.0 = glm(Retired~1, data = tendata)
+
+fit.1 = glm(Retired~Location,data=tendata)
+summary(fit.1)
+anova(fit.0,fit.1, test = "Chisq") #It seems that Location is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.2 = glm(Retired~Tournament,data=tendata)
+summary(fit.2)
+anova(fit.0,fit.2, test = "Chisq") #It seems that Tournament is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.3 = glm(Retired~Season,data=tendata)
+summary(fit.3)
+anova(fit.0,fit.3, test = "Chisq") #It seems that Season is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.4 = glm(Retired~Surface,data=tendata)
+summary(fit.4)
+anova(fit.0,fit.4, test = "Chisq") #It seems that Surface is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.5 = glm(Retired~Round,data=tendata)
+summary(fit.5)
+anova(fit.0,fit.5, test = "Chisq") #It seems that Round is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.6 = glm(Retired~Best.of,data=tendata)
+summary(fit.6)
+anova(fit.0,fit.6, test = "Chisq") #Seems to be impactful
+
+fit.7 = glm(Retired~Winner,data=tendata)
+summary(fit.7)
+anova(fit.0,fit.7, test = "Chisq") #It seems that Winner is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.8 = glm(Retired~Loser,data=tendata)
+summary(fit.8)
+anova(fit.0,fit.8, test = "Chisq") #Seems to be impactful
+
+fit.9 = glm(Retired~WRank,data=tendata)
+summary(fit.9)
+anova(fit.0,fit.9, test = "Chisq") #It seems that WRank is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.10 = glm(Retired~LRank,data=tendata)
+summary(fit.10)
+
+anova(fit.0,fit.10, test = "Chisq") #It seems that LRank is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.11 = glm(Retired~Wsets,data=tendata)
+summary(fit.11)
+anova(fit.0,fit.11, test = "Chisq") #Seems to be impactful
+
+fit.12 = glm(Retired~W1,data=tendata)
+summary(fit.12)
+anova(fit.0,fit.12, test = "Chisq") #It seems that W1 is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.13 = glm(Retired~L1,data=tendata)
+summary(fit.13)
+anova(fit.0,fit.13, test = "Chisq") #It seems that L1 is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.14 = glm(Retired~W2,data=tendata)
+summary(fit.14)
+anova(fit.0,fit.14, test = "Chisq") #It seems that W2 is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.15 = glm(Retired~L2,data=tendata)
+summary(fit.15)
+anova(fit.0,fit.15, test = "Chisq") #It seems that L2 is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.16 = glm(Retired~W3,data=tendata)
+summary(fit.16)
+anova(fit.0,fit.16, test = "Chisq") #It seems that W3 is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.17 = glm(Retired~L3,data=tendata)
+summary(fit.17)
+anova(fit.0,fit.17, test = "Chisq") #It seems that L3 is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.18 = glm(Retired~W4,data=tendata)
+summary(fit.18)
+anova(fit.0,fit.18, test = "Chisq") #It seems that W4 is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.19 = glm(Retired~L4,data=tendata)
+summary(fit.19)
+anova(fit.0,fit.19, test = "Chisq") #It seems that L4 is not a significant predictor, p-value is too high for alpha level of .05
+
+fit.20 = glm(Retired~W5,data=tendata)
+summary(fit.20)
+anova(fit.0,fit.20, test = "Chisq") #Seems to be impactful
+
+fit.21 = glm(Retired~L5,data=tendata)
+summary(fit.21)
+anova(fit.0,fit.21, test = "Chisq") #Seems to be impactful
+
+#The variables Best.of(2.309e-07)***, Loser(0.005218)**, Wsets(2.2e-16)***, and W5(2.776e-14)*** and L5(1.483e-05)*** are significant and seem to be helpful
+
+fit.null = glm(Retired~1, data = tendata) 
+fit.full = glm(Retired~Loser, data = tendata)
+anova(fit.null,fit.full, test = "Chisq") #This variable is significant so we will continue selection
+
+fit.null_1 = glm(Retired~Loser, data = tendata) 
+fit.full_1 = glm(Retired~Loser+L5, data = tendata)
+anova(fit.null_1,fit.full_1, test = "Chisq") #This variable is significant so we will continue selection
+
+fit.null_2 = glm(Retired~Loser+L5, data = tendata) 
+fit.full_2 = glm(Retired~Loser+L5+Best.of, data = tendata)
+anova(fit.null_2,fit.full_2, test = "Chisq") #This variable is significant so we will continue selection
+
+fit.null_3 = glm(Retired~Loser+L5+Best.of, data = tendata) 
+fit.full_3 = glm(Retired~Loser+L5+Best.of+W5, data = tendata)
+anova(fit.null_3,fit.full_3, test = "Chisq") #This variable is significant so we will continue selection
+
+fit.null_4 = glm(Retired~Loser+L5+Best.of+W5, data = tendata) 
+fit.full_4 = glm(Retired~Loser+L5+Best.of+W5+Wsets, data = tendata)
+anova(fit.null_4,fit.full_4, test = "Chisq") #This variable is also significant so we will continue selection
+
+#Add next most impactful variable
+
+fit.null_5 = glm(Retired~Loser+L5+Best.of+W5+Wsets, data = tendata) 
+fit.full_5 = glm(Retired~Loser+L5+Best.of+W5+Wsets+L1, data = tendata)
+anova(fit.null_5,fit.full_5, test = "Chisq") #P-value is insignificant and our deviance drops a lot so this is where forward selection ends
+
+#Model Defined by Forward Selection:
+
+#glm(Retired~Loser+L5+Best.of+W5+Wsets)
+summary(fit.full_4)
+anova(fit.null,fit.full_4, test = "Chisq")
+
+##Backward Selection
+
+fit.full_6 = glm(Retired~Location+Tournament+Season+Surface+Round+Best.of+Winner+Loser+WRank+LRank+Wsets+W1+W2+W3+W4+W5+L1+L2+L3+L4+L5, data = tendata)
+summary(fit.full_6)
+anova(fit.null, fit.full_6)  #Tournament is the least significant variable so we can remove this
+
+fit.full_7 = glm(Retired~Location+Season+Surface+Round+Best.of+Winner+Loser+WRank+LRank+Wsets+W1+W2+W3+W4+W5+L1+L2+L3+L4+L5, data = tendata)
+summary(fit.full_7)
+anova(fit.null, fit.full_7)  #Round is the least significant variable so we can remove this
+
+fit.full_8 = glm(Retired~Location+Season+Surface+Best.of+Winner+Loser+WRank+LRank+Wsets+W1+W2+W3+W4+W5+L1+L2+L3+L4+L5, data = tendata)
+summary(fit.full_8)
+anova(fit.null, fit.full_8)  #L2 is the least significant variable so we can remove this
+
+fit.full_9 = glm(Retired~Location+Season+Surface+Best.of+Winner+Loser+WRank+LRank+Wsets+W1+W2+W3+W4+W5+L1+L3+L4+L5, data = tendata)
+summary(fit.full_9)
+anova(fit.null, fit.full_9)  #L5 is the least significant variable so we can remove this
+
+fit.full_10 = glm(Retired~Location+Season+Surface+Best.of+Winner+Loser+LRank+Wsets+W1+W2+W3+W4+W5+L1+L3+L4, data = tendata)
+summary(fit.full_10)
+anova(fit.null, fit.full_10)  #Location is the least significant variable so we can remove this
+
+fit.full_11 = glm(Retired~Season+Surface+Best.of+Winner+Loser+Wsets+LRank+W1+W2+W3+W4+W5+L1+L3+L4, data = tendata)
+summary(fit.full_11)
+anova(fit.null, fit.full_11)  #Loser is the least significant variable so we can remove this
+
+fit.full_12 = glm(Retired~Season+Surface+Best.of+Winner+LRank+Wsets+W1+W2+W3+W4+W5+L1+L3+L4, data = tendata)
+summary(fit.full_12)
+anova(fit.null, fit.full_12)  #Season is the least significant variable so we can remove this
+
+fit.full_13 = glm(Retired~Surface+Best.of+Winner+LRank+Wsets+W1+W2+W3+W4+W5+L1+L3+L4, data = tendata)
+summary(fit.full_13)
+anova(fit.null, fit.full_13)  #L1 is the least significant variable so we can remove this
+
+fit.full_14 = glm(Retired~Surface+Best.of+Winner+LRank+Wsets+W1+W2+W3+W4+W5+L3+L4, data = tendata)
+summary(fit.full_14)
+anova(fit.null, fit.full_14)  #W1 is the least significant variable so we can remove this
+
+fit.full_15 = glm(Retired~Surface+Best.of+Winner+LRank+Wsets+W2+W3+W4+W5+L3+L4, data = tendata)
+summary(fit.full_15)
+anova(fit.null, fit.full_15)  #W4 is the least significant variable so we can remove this
+
+fit.full_16 = glm(Retired~Surface+Best.of+Winner+LRank+Wsets+W2+W3+W5+L3+L4, data = tendata)
+summary(fit.full_16)
+anova(fit.null, fit.full_16)  #W3 is the least significant variable so we can remove this
+
+fit.full_17 = glm(Retired~Surface+Best.of+Winner+LRank+Wsets+W2+W5+L3+L4, data = tendata)
+summary(fit.full_17)
+anova(fit.null, fit.full_17)  #Winner is the least significant variable so we can remove this
+
+fit.full_18 = glm(Retired~Surface+Best.of+LRank+Wsets+W2+W5+L3+L4, data = tendata)
+summary(fit.full_18)
+anova(fit.null, fit.full_18)  #W2 is the least significant variable so we can remove this
+
+fit.full_19 = glm(Retired~Surface+Best.of+LRank+Wsets+W5+L3+L4, data = tendata)
+summary(fit.full_19)
+anova(fit.null, fit.full_19)  #LRank is the least significant variable so we can remove this
+
+fit.full_20 = glm(Retired~Surface+Best.of+Wsets+W5+L3+L4, data = tendata)
+summary(fit.full_20)
+anova(fit.null, fit.full_20)  #Best.of is the least significant variable so we can remove this
+
+fit.full_21 = glm(Retired~Surface+Wsets+W5+L3+L4, data = tendata)
+summary(fit.full_21)
+anova(fit.null, fit.full_21)  #Surface is the least significant variable so we can remove this
+
+fit.full_22 = glm(Retired~Wsets+W5+L3+L4, data = tendata)
+summary(fit.full_22)
+anova(fit.null, fit.full_22)  #W5 is the least significant variable so we can remove this
+
+fit.full_23 = glm(Retired~Wsets+L3+L4, data = tendata)
+summary(fit.full_23)
+anova(fit.null, fit.full_23)  #L4 is the least significant variable so we can remove this
+
+fit.full_24 = glm(Retired~Wsets+L3, data = tendata)
+summary(fit.full_24)
+anova(fit.null, fit.full_24, test = "Chisq")  #All predictors are significant, we may keep the model
+
+#Final Model through Backward Selection:
+
+#glm(Retired~Wsets+L3)
+```
+
+```{r}
+#Automated Selection Techniques
+library(leaps)
+library(MASS)
+
+backwardAIC <- stepAIC(fit.full_6, trace=FALSE, direction="backward")
+stepAIC(fit.full_6, trace=FALSE, direction="backward") #Backward Selection
+
+summary(backwardAIC)
+anova(fit.null, backwardAIC, test = "Chisq")
+
+#Final Model through AIC based subset regression selection (This has the lowest AIC and P-value with high Deviance, thus I will use this as the final model)
+
+#glm(formula = Retired ~ Wsets + W5 + L3 + L4)
+
+```
+
+```{r}
+#This model was chosen to be the final model as it contains variables from the automated and backwards selection methods and depicts the lowest AIC Value as well as P-value for Chi-Square
+
+fit.final = backwardAIC
+anova(fit.null, fit.final, test = "Chisq")
+
+
+logLik(fit.final) #Check Log likelihood
+
+#To Check Predictive Ability
+#cutpoint = 0.2
+#predict(fit.final, type = "resp") #Just a check to show that our model has predictive ability
+
+#Hosmer Lemeshow GOF Test
+# library(ResourceSelection)
+# hoslem.test(tendata$Retired, fitted(fit.final))
+
+plot(predict(fit.final),residuals(fit.final)) #plot(fitted(fit.final), resid(fit.final))
+lines(lowess(predict(fit.final),residuals(fit.final)),col="purple",lwd=2) 
+
+#Final Plots
+plot(fit.final) #Just to make sure all plots look normal
+
+#Code From Lab 8
+calcSensSpec = function(c, phat, Yobs)
+{
+Ynew = ifelse(phat >= c, 1, 0)
+sens = mean(Ynew[Yobs==1]) ## true positive
+spec = 1-mean(Ynew[Yobs==0]) ## true negative
+return(c(sens=sens, spec=spec))
+}
+plotROC = function(fit, Y, mytitle = "ROC Curve")
+{
+cvec = seq(0,1,0.01)
+sensSpecVec = sapply(cvec, calcSensSpec, predict(fit, type = "resp"), Y)
+plot(1-sensSpecVec["spec",], sensSpecVec["sens",],
+ylab = "Sensitivity", xlab = "1-Specificity",
+main = mytitle)
+}
+
+#ROC Curve
+ROC <- plotROC(fit.final, tendata$Retired, mytitle = "ROC Curve for Automated Subset Selection Logistic Model")
+
+library(ROCR)
+prob <- predict(fit.final, data = tendata, type="response")
+pred <- prediction(prob, tendata$Retired)
+perf <- performance(pred, "tpr", "fpr")
+plot(perf) 
+
+#Area under curve
+auc <- performance(pred, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+
+Distinction = predict(fit.final, type = "resp")
+boxplot(Distinction ~ tendata$Retired) #It seems like the model does a good job of distinguishing the retired from non-retired matches
+
+#Create a Super W and L Variable to ensure the auc is actually 1
+
+tendata$Wsuper <- (tendata$W1 + tendata$W2 + tendata$W3 + tendata$W4 + tendata$W5)/(5)
+
+tendata$Lsuper <- (tendata$L1 + tendata$L2 + tendata$L3 + tendata$L4 + tendata$L5)/(5)
+                         
+fit.super = glm(Retired ~ Wsets + Wsuper + Lsuper, data = tendata, family = binomial)
+
+ROC_1 <- plotROC(fit.super, tendata$Retired, mytitle = "ROC Curve for Automated Subset Selection Logistic Model")
+
+library(ROCR)
+prob_1 <- predict(fit.super, data = tendata, type="response")
+pred_1 <- prediction(prob, tendata$Retired)
+perf_1 <- performance(pred, "tpr", "fpr")
+plot(perf_1) 
+
+#Area under curve
+auc_1 <- performance(pred, measure = "auc")
+auc_1 <- auc_1@y.values[[1]]
+auc_1
+
+Distinction_1 = predict(fit.super, type = "resp")
+boxplot(Distinction_1 ~ tendata$Retired) #It seems like the model when averaging for the W and L variables also does a fairly good job of distinguishing between retirement and not, so we may conclude the auc of 1 in the prior curve is accurate
+```
+
+<div style="line-height: 2em;">
+
+**Abstract:**
+
+Tennis is a sport played worldwide with a robust international following. To this end, players are making millions of dollars and consumers are spending even more to watch them. This is why match retirement can negatively impact both the ATP World Tour and millions of tennis fans across the globe. In this analysis, I chose to focus on which characteristics of a match led players to retire early. Specifically, I focused on the 21 variables featured in Table 1 in order to predict the binary outcome of whether or not a match will be retired. First and foremost, the R package “ggplot2” was utilized in developing graphics for data exploration, followed by a baseline anova test for each variable to determine significant predictors. Regression subsets were selected using manual forward selection as well as manual and automated backward elimination (stepAIC function, package “MASS”). This yielded a final model containing the variables Wsets, W5, L3, and L4; all of which were also predictors of at least one of the manually specified model. The final AIC was -7306.2 with a p-value of 2.2e^-16 and deviance 17.83. Ultimately, these results will allow ATP to better prepare for retirement in match play and warn consumers when a match might end early, saving both parties time and money.
+
+**Introduction:**
+
+Tennis has gained a wide international following in over 40 countries across the globe (Fernandez et al. 2006). Tournaments around the world on the ATP Tour entertain millions of people who pay hundreds of dollars at a time for a seat to spectate live tennis matches. However, retirement of tennis matches can negatively impact both tennis fans and the ATP. For example, if a match is retired, not only does the consumer lose the money they paid to watch the match, but the players are also retiring due to exhaustion or some other issue. This indirectly harms the ATP who may lose potential fans coming to see the now injured players, and the entry fee retired players would potentially pay to enter other tournaments. Moreover, starts and stops, ignition of various muscle groups, and awkward motion a player’s body undergoes while playing tennis can be quite taxing (Reid and Duffield 2014). Therefore, it is important to study why retirements occur and how to prevent them, for the sake of consumers and ATP pros across the Tour. Moreover, certain variables can be indicative of signs for retirement in match-play. Take into account the varying conditions between a humid city like Madrid, Spain (Clay Courts) and frosty Flushing, NY (Hard Courts). Environmental factors can negatively impact a player’s ability to perform in new environments and may even lead to unnecessary stress, causing players to retire. This is where experience and ATP Rank comes into play. More experienced pros will often withdraw from tournaments and matches to preserve health while novice players must persevere without retiring, as they cannot afford to let tournament entry fees, or increased play time go to waste. Finally, the course of a match leading up to retirement can be a large factor in determining whether or not a match will be finished. Tiebreakers can often exhaust players and commanding one-way leads may discourage the losing player from continuing match play. The overall goal in relation to the motivating question of retirement in tennis matches is to determine which of these mentioned characteristics most prominently impacts match retirement rates.
+
+**Methods:**
+
+The data used in this analysis was sourced from a data set built by Jordan Goblet on Kaggle.com, based on the original ATP match results and betting odds distributed by the ATP World Tour. The original data set consisted of 8,637 matches (Played from 2000 to 2016) and 27 variables. The final analysis data set was comprised of 1,593 complete matches explained by 21 variables (Table 1). Categorical variables were presented as the names of a tournament, rounds, Surface etc. However, numerical variables were presented in strings of numeric values such as 5, representing 5 games won or 5 sets (for variables Wsets and Best.of). Scores are self-reported by officials who proctor the matches on the ATP World Tour and are then kept in a database run by the Association of Tennis Professionals. This analysis focused on a logistic approach to indicate which variables would best predict if a match would be retired. Preliminary data exploration focused upon two expanded splom figures to examine variable relationship in addition to segmented bar plots for Season, Surface, and Round. Initial variable selection occured by doing an anova test for each variable against a model of Retired~1. Manual forward selection, manual backward elimination, and automated backward elimination (step AIC command in the R package, "MASS") were then used to fit a model to predict match retirement. For manual forward selection and backward elimination, variable exclusion/inclusion criterion was based on whether or not the p-value (significance level .05) of the model remained significant. On the other hand, for automated backward elimination, the model was specified based on the Akaike Information Criterion, with lower AIC values corresponding to better models. The final model was then validated by examining plots of residuals against fitted values (Figure 1), calculating the log likelihood of the model, producing an ROC curve (Figure 2), and finding the area under the curve (also known as the c-index).
+
+**Results:**
+
+The variables Court, Series, and Lsets were useless predictors as they showed no variation (Table 1). However, the expanded sploms illustrated how Lsets had zero correlation with the remaining predictors and that L3 and L4 have similar positive relationships to the outcome variable. Wsets was seen to have a value of 2 for approximately 1.26% of observations in the data set and a value of 3 for the remainder of observations. Similarly, the outcome variable of Retired was only observed in 1.19% of the matches which were analyzed. Explanatory plots of the variables Season, Round, and Surface illustrated that the highest proportion of retirements occur in the Fall time (2.24% of all Seasons) during the 1st round of play (1.62% of all Rounds) on hard court surfaces (1.39% of all Surfaces). Number of games won by each player had roughly even means with a right-skewed shape. Following data exploration, manual selection methods lended to a final forward selection model with an AIC of -6,612.2 and p-value of 2.2e^-16. Likewise, backward elimination produced a final model with an AIC of -7,304.5 and an identical p-value of 2.2e^-16. However, the stepAIC command specified the best fitting model with an AIC of -7,306.2 and a p-value of 2.2e^-16 as well. Each of the variables in this model also appeared in at least one of the other manually fitted models. Therefore, the final model used to predict the binary outcome of match retirement included the variables Wsets, W5, L3, and L4; with L3 being the only statistically significant predictor. The model results state: With a 1 set increase in Wsets holding all other predictors constant, there is a .95 decrease in the log odds of the match being retired. With a 1 game increase in W5 holding all other predictors constant there is a (.45)10^-3 decrease in the log odds of the match being retired. With a 1 game increase in L3 and L4 holding all other predictors constant there is a (.95)10^-3 and (.58)10^-3 increase in the log odds of the match being retired respectively. The odds ratios for Wsets, W5, L3, and L4 are 0.39, 0.99, 1.00, and 1.00 respectively. Therefore, it can be seen that a match is about .39 times less likely to retire if the winner wins 3 sets as opposed to 2 sets. Moreover, since the odds ratio is approximately 1 for W5, L3, and L4, it can be concluded that the odds of retiring and completing the match are roughly the same in sets 3, 4, and 5 for the loser and winner regardless of who wins a game. Finally, a Hosmer Lemeshow Goodness-of-Fit test yielded a chi-squared statistic of 8.31e^-11 and p-value of 1. The log likelihood of the model was calculated to be 3659.076 (df=6) along with a c-index of 1 for the model (Figure 2); indicating just as the randomly scattered residuals do, (Figure 1) that the model is a good fit for predicting match Retirement. 
+
+**Discussion:**
+
+The variables specified to predict match retirement are consistent with prior research and current trends of match play in tennis. The increase in the number of sets the winner wins associated with a decrease in log odds make sense for this scenario. Although players might retire as late as the third set, most players retire earlier in order to protect their bodies from overexertion, caused by strenuous physical activity (Fernandez et al. 2006). The coinciding odds ratio is .39. Therefore, Log odds of retirement decreases with winning more sets. This is because intuitively it can be seen that unhindered progression of a match would indicate that the match will be completed. W5, L3, and L4 are important predictors because the physiological ware and tare of a match, as well as the physical exhaustion of a match can negatively impact a player’s performance as the match unfolds, causing them to unwillingly retire (Reid and Duffield 2014). Javier Maquirriain (2015) evinces how 41.66% of retirements happened during or after the 2nd set of the Davis Cup Tournament while 33.33% occurred amidst the third set. This is consistent with the findings of this analysis as most players retired following the victory of 2 sets by the winner. An inconsistency with this analysis is observed by Breznik and Batagelj (2012) who found both the type of tournament and surface to be statistically significant in predicting retirement from matches. This might be the consequence of utilizing a small data set for analysis as there is very little variability in these predictors (Table 1). One similarity of this analysis to Clarke and Dyte (2000) is how the rank of a player did not significantly predict match retirement. The inferences which can be made about match retirement from this analysis only apply to Grand Slam Series Tournaments from 2000 to 2016 since no other match types were observed. Figure 1 depicted a possible outlier which was ultimately disregarded because the residuals plot seemed to be randomly scattered and focused over the residuals = 0 line. The point also did not impact the lowess line fit to the plot (Figure 1). Figure 2 depicts the ROC curve for this analysis with c-index 1. Since this seemed unusual, two new variables were created combining all of the “W” and “L” variables and the final model was specified with these variables in place of W5, L3, and L4. However, this model also had a c-index of .99; once again indicating that the model is a good distinguisher between retired matches and complete matches.
+
+**Conclusion:**
+
+Ultimately, backward elimination model specification resulted in a final model fitted on 4 predictors (Table 2). Wsets and L5 were seen to be negatively associated with the log odds of match retirement for a 1 unit increase in either predictor holding all others constant. L3 and L4 exhibited the opposite relationship. It seems that as matches progress, players seem to retire due to exertion and or injury. However, if the game gets too far along, then it won’t be likely that either player retires. This may be because it’s more beneficial to finish a match than retire if so much of it has been played already. Overall, this model can be used to help caution the ATP for the retirement of a match and to help consumers to be more cognizant of the defining characteristics of match retirement; allowing both parties to actively prepare for a match retirement, saving time and money overall.
+
+=============================================================================================================================================================================
+
+Here is where the graphs for the article will be included:
+
+**Figure 1:** *Residuals against Fitted Values for Final Model*
+
+This figure is a graph of the fitted and residual values of the final model chosen through backwards automated seleciton. The purple line indicates a lowess line to better vidualize the plot.
+
+```{r, echo = FALSE, message=FALSE, warning=FALSE}
+plot(predict(fit.final),residuals(fit.final)) #plot(fitted(fit.final), resid(fit.final))
+lines(lowess(predict(fit.final),residuals(fit.final)),col="purple",lwd=2)
+```
+
+**Figure 2:** *Receiver Operating Curve for Final Model*
+
+This figure is a graph of the ROC Curve for the final model chosen through backwrd selection.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+ROC <- plotROC(fit.final, tendata$Retired, mytitle = "ROC Curve for Automated Subset Selection Logistic Model")
+
+library(ROCR)
+prob <- predict(fit.final, data = tendata, type="response")
+pred <- prediction(prob, tendata$Retired)
+perf <- performance(pred, "tpr", "fpr")
+plot(perf)
+```
+
+**Table 1:** *Baseline Univariate Summary of Predictors Utilized in Logistic Analysis*
+
+This table shows the summary statistics for the variables used to create the final model and run a logistic regression analysis.
+
+```{r,message=FALSE, warning=FALSE, echo=FALSE}
+summary(tendata)
+```
+
+**Table 2:** *Output for Final Model Summary*
+
+This table shows the summary statistics for the final model and its predictors chosen to predict whether oor not a match would be retired.
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+summary(backwardAIC)
+```
+
+Literature Cited:
+
+Breznik, Kristijan, and Vladimir, Batagelj. “Retired Matches Among Male Professional Tennis Players.” Journal of Sports Science & Medicine 11.2 (2012): 270–278. Web. 6 Dec. 2017.
+  https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3737881/
+
+Clarke, Stephen, and Dyte, David. “Using Official Ratings to Simulate Major Tennis Tournaments.” Elsevier 5.10 (2000): 585-594. Web. 3 Dec. 2017.
+  http://onlinelibrary.wiley.com/doi/10.1111/j.1475-3995.2000.tb00218.x/epdf
+
+Fernandez, J, Mendez‐Villanueva, and B. M. Pluim. “Intensity of Tennis Match Play.” British Journal of Sports Medicine 40.5 (2006): 387–391. Web. 6 Dec. 2017.
+  https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2653872/
+
+Maquirriain, Javier, and Baglione, Roberto. “Epidemiology of tennis injuries: An eight-year review of Davis Cup retirements.” European Journal of Sport Science 2.12 (2015). Web. 3 Dec. 2017.
+  http://www.tandfonline.com/doi/full/10.1080/17461391.2015.1009493
+
+Reid, Machar, and Duffield, Rob. “The development of fatigue during match-play tennis.” Br J Sportsmed 1.12 (2014): 1-6. Web. 3 Dec. 2017.
+  http://images.biomedsearch.com/24668384/bjsports-2013-093196.pdf?AWSAccessKeyId=AKIAIBOKHYOLP4MBMRGQ&Expires=1512518400&Signature=%2FYds5eJ%2BZyw78jitMGVmXlKjKsE%3D
+
+</div>
+
+
+
